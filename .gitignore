@@ -1,7 +1,9 @@
 node_modules/
 .expo/
 dist/
-ios/
+ios/build/
+ios/Pods/
+ios/DerivedData/
 android/
 *.log
 .DS_Store
