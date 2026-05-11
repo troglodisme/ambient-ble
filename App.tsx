@@ -5,11 +5,14 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
 
 import {
   DiscoveredDevice,
@@ -18,19 +21,23 @@ import {
   clearHistory,
   connectAndSubscribe,
   downloadHistory,
+  getRecordMs,
   readHistoryCount,
+  recordsToCSV,
   startScan,
 } from './src/ble';
+import HistoryChart from './src/HistoryChart';
 import { colors, radius, spacing } from './src/theme';
 
 type ConnState = 'idle' | 'connecting' | 'connected' | 'error';
-type Screen = 'live' | 'history';
+type Screen = 'live' | 'session' | 'history';
 
 export default function App() {
   const [devices, setDevices]       = useState<Record<string, DiscoveredDevice>>({});
   const [scanning, setScanning]     = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [connState, setConnState]   = useState<ConnState>('idle');
+  const [connStatus, setConnStatus] = useState<string>('');
   const [readings, setReadings]     = useState<Readings>({});
   const [error, setError]           = useState<string | null>(null);
   const [screen, setScreen]         = useState<Screen>('live');
@@ -39,13 +46,35 @@ export default function App() {
   const [downloading, setDownloading]   = useState(false);
   const [dlProgress, setDlProgress] = useState<{ received: number; total: number } | null>(null);
   const [hasHistory, setHasHistory] = useState(false);
+  const [anchorMs, setAnchorMs] = useState<number>(0);
+  const [timeOffset, setTimeOffset] = useState<number>(0);
+  const [liveHistory, setLiveHistory] = useState<HistoryRecord[]>([]);
 
   const stopScanRef = useRef<(() => void) | null>(null);
   const disconnectRef = useRef<(() => Promise<void>) | null>(null);
+  const lastLiveTs = useRef<number>(0);
 
   useEffect(() => {
     return () => { stopScanRef.current?.(); disconnectRef.current?.(); };
   }, []);
+
+  useEffect(() => {
+    if (!readings.particles || !readings.gases || !readings.env) return;
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (nowSec <= lastLiveTs.current) return;
+    lastLiveTs.current = nowSec;
+    const rec: HistoryRecord = {
+      ts: nowSec,
+      pm1: readings.particles.pm1, pm25: readings.particles.pm25,
+      pm4: readings.particles.pm4, pm10: readings.particles.pm10,
+      co2: readings.gases.co2, voc: readings.gases.voc, nox: readings.gases.nox,
+      temperature: readings.env.temperature, humidity: readings.env.humidity,
+    };
+    setLiveHistory(prev => {
+      const next = [...prev, rec];
+      return next.length > 600 ? next.slice(-600) : next;
+    });
+  }, [readings.updatedAt]);
 
   async function requestAndroidPerms() {
     if (Platform.OS !== 'android') return true;
@@ -57,43 +86,60 @@ export default function App() {
   }
 
   async function handleScan() {
+    console.log('[App] handleScan start');
     setError(null);
     if (!(await requestAndroidPerms())) { setError('Bluetooth permissions denied'); return; }
     setDevices({});
     setScanning(true);
     try {
-      const stop = await startScan(d => setDevices(prev => ({ ...prev, [d.id]: d })));
+      const stop = await startScan(d => {
+        console.log('[App] device discovered:', d.name, d.id);
+        setDevices(prev => ({ ...prev, [d.id]: d }));
+      });
+      console.log('[App] scan running');
       stopScanRef.current = stop;
       setTimeout(() => { stop(); stopScanRef.current = null; setScanning(false); }, 30_000);
     } catch (e: any) {
+      console.log('[App] scan error:', e);
       setError(e?.message ?? 'Scan failed');
       setScanning(false);
     }
   }
 
   async function handleConnect(d: DiscoveredDevice) {
+    console.log('[App] handleConnect:', d.name, d.id);
     stopScanRef.current?.();
     setScanning(false);
     setSelectedId(d.id);
     setConnState('connecting');
+    setConnStatus('Connecting…');
     setReadings({});
     setHistory([]);
     setHistCount(0);
     setError(null);
     setScreen('live');
     try {
-      const conn = await connectAndSubscribe(d.id, r => setReadings(r));
+      const conn = await connectAndSubscribe(d.id, r => {
+        console.log('[App] readings update:', JSON.stringify(r));
+        setReadings(r);
+      }, setConnStatus);
       disconnectRef.current = conn.disconnect;
       setHasHistory(conn.hasHistory ?? false);
+      setTimeOffset(conn.timeOffset ?? 0);
+      console.log('[App] connected. hasHistory:', conn.hasHistory, 'hasBattery:', conn.hasBattery, 'timeOffset:', conn.timeOffset);
       setConnState('connected');
+      setConnStatus('');
 
       if (conn.hasHistory) {
         const count = await readHistoryCount(d.id);
+        console.log('[App] history count:', count);
         setHistCount(count);
       }
     } catch (e: any) {
+      console.log('[App] connect error:', e);
       setError(e?.message ?? 'Connection failed');
       setConnState('error');
+      setConnStatus('');
     }
   }
 
@@ -104,6 +150,9 @@ export default function App() {
     setSelectedId(null);
     setReadings({});
     setScreen('live');
+    setLiveHistory([]);
+    lastLiveTs.current = 0;
+    setTimeOffset(0);
   }
 
   async function handleDownload() {
@@ -112,10 +161,11 @@ export default function App() {
     setDlProgress({ received: 0, total: histCount });
     setHistory([]);
     try {
-      const records = await downloadHistory(selectedId, (received, total) => {
+      const result = await downloadHistory(selectedId, (received, total) => {
         setDlProgress({ received, total });
       });
-      setHistory(records);
+      setHistory(result.records);
+      setAnchorMs(result.anchorMs);
     } catch (e: any) {
       setError(e?.message ?? 'Download failed');
     } finally {
@@ -188,6 +238,11 @@ export default function App() {
                 ]}>
                   {connState === 'connecting' ? 'Connecting…' : connState}
                 </Text>
+                {connState === 'connected' && (
+                  <Text style={[styles.cardMeta, { color: timeOffset > 0 ? colors.good : colors.fair }]}>
+                    {timeOffset > 0 ? '✓ Time synced' : '⚠ Time not set'}
+                  </Text>
+                )}
               </View>
               <Pressable style={styles.smallButton} onPress={handleDisconnect}>
                 <Text style={styles.smallButtonText}>Disconnect</Text>
@@ -197,7 +252,10 @@ export default function App() {
             {error && <Text style={styles.error}>{error}</Text>}
 
             {connState === 'connecting' && (
-              <ActivityIndicator color={colors.orange} style={{ marginTop: spacing.lg }} />
+              <View style={{ alignItems: 'center', marginTop: spacing.lg }}>
+                <ActivityIndicator color={colors.orange} />
+                {connStatus ? <Text style={[styles.cardMeta, { marginTop: spacing.sm }]}>{connStatus}</Text> : null}
+              </View>
             )}
 
             {connState === 'connected' && (
@@ -208,23 +266,29 @@ export default function App() {
                     style={[styles.tab, screen === 'live' && styles.tabActive]}
                     onPress={() => setScreen('live')}
                   >
-                    <Text style={[styles.tabText, screen === 'live' && styles.tabTextActive]}>
-                      Live
+                    <Text style={[styles.tabText, screen === 'live' && styles.tabTextActive]}>Live</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.tab, screen === 'session' && styles.tabActive]}
+                    onPress={() => setScreen('session')}
+                  >
+                    <Text style={[styles.tabText, screen === 'session' && styles.tabTextActive]}>Session</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.tab, screen === 'history' && styles.tabActive]}
+                    onPress={() => setScreen('history')}
+                  >
+                    <Text style={[styles.tabText, screen === 'history' && styles.tabTextActive]}>
+                      History {histCount > 0 ? `(${histCount})` : ''}
                     </Text>
                   </Pressable>
-                  {hasHistory && (
-                    <Pressable
-                      style={[styles.tab, screen === 'history' && styles.tabActive]}
-                      onPress={() => setScreen('history')}
-                    >
-                      <Text style={[styles.tabText, screen === 'history' && styles.tabTextActive]}>
-                        History {histCount > 0 ? `(${histCount})` : ''}
-                      </Text>
-                    </Pressable>
-                  )}
                 </View>
 
                 {screen === 'live' && <ReadingsView readings={readings} />}
+
+                {screen === 'session' && (
+                  <SessionView liveHistory={liveHistory} />
+                )}
 
                 {screen === 'history' && (
                   <HistoryView
@@ -232,6 +296,8 @@ export default function App() {
                     count={histCount}
                     downloading={downloading}
                     progress={dlProgress}
+                    anchorMs={anchorMs}
+                    timeOffset={timeOffset}
                     onDownload={handleDownload}
                     onClear={handleClearHistory}
                   />
@@ -260,12 +326,12 @@ function ReadingsView({ readings }: { readings: Readings }) {
       </Section>
       <Section title="Particles (µg/m³)">
         <Metric label="PM1"   value={particles?.pm1.toFixed(1)} />
-        <Metric label="PM2.5" value={particles?.pm25.toFixed(1)} highlight />
+        <Metric label="PM2.5" value={particles?.pm25.toFixed(1)} />
         <Metric label="PM4"   value={particles?.pm4.toFixed(1)} />
         <Metric label="PM10"  value={particles?.pm10.toFixed(1)} />
       </Section>
       <Section title="Gases">
-        <Metric label="CO₂" value={gases?.co2.toString()} unit="ppm" highlight />
+        <Metric label="CO₂" value={gases?.co2.toString()} unit="ppm" />
         <Metric label="VOC" value={gases?.voc.toFixed(1)} unit="idx" />
         <Metric label="NOx" value={gases?.nox.toFixed(1)} unit="idx" />
       </Section>
@@ -281,66 +347,116 @@ function ReadingsView({ readings }: { readings: Readings }) {
 
 // ── History ───────────────────────────────────────────────────
 
+function SessionView({ liveHistory }: { liveHistory: HistoryRecord[] }) {
+  if (liveHistory.length < 2) {
+    return (
+      <View style={styles.card}>
+        <View style={[styles.row, { gap: spacing.sm }]}>
+          <View style={styles.liveBadge}><Text style={styles.liveBadgeText}>● LIVE</Text></View>
+          <Text style={styles.cardTitle}>This Session</Text>
+        </View>
+        <Text style={[styles.muted, { marginTop: spacing.sm }]}>Readings will appear here once sensor data arrives…</Text>
+      </View>
+    );
+  }
+  return (
+    <View style={styles.section}>
+      <View style={[styles.row, { justifyContent: 'space-between' }]}>
+        <Text style={styles.cardTitle}>This Session</Text>
+        <View style={styles.liveBadge}><Text style={styles.liveBadgeText}>● LIVE</Text></View>
+      </View>
+      <Text style={[styles.cardMeta, { marginTop: 2, marginBottom: spacing.sm }]}>
+        {liveHistory.length} reading{liveHistory.length !== 1 ? 's' : ''} · 1 per second
+      </Text>
+      <HistoryChart records={liveHistory} anchorMs={0} timeOffset={0} />
+    </View>
+  );
+}
+
 function HistoryView({
-  records, count, downloading, progress, onDownload, onClear,
+  records, count, downloading, progress, anchorMs, timeOffset, onDownload, onClear,
 }: {
   records: HistoryRecord[];
   count: number;
   downloading: boolean;
   progress: { received: number; total: number } | null;
+  anchorMs: number;
+  timeOffset: number;
   onDownload: () => void;
   onClear: () => void;
 }) {
-  if (count === 0) {
+  const hasDevice = count > 0;
+  const hasDownloaded = records.length > 0;
+
+  if (!hasDevice && !hasDownloaded) {
     return (
       <View style={styles.card}>
-        <Text style={styles.muted}>No history stored yet. Records are saved every 60 s.</Text>
+        <Text style={styles.muted}>No device history yet — records are saved every 60 s.</Text>
       </View>
     );
   }
 
   return (
     <View style={{ gap: spacing.md }}>
-      <View style={styles.card}>
-        <Text style={styles.sectionTitle}>{count} RECORDS ON DEVICE</Text>
-        <View style={[styles.row, { marginTop: spacing.md }]}>
-          <Pressable
-            style={[styles.button, downloading && styles.buttonDisabled]}
-            onPress={onDownload}
-            disabled={downloading}
-          >
-            <Text style={styles.buttonText}>
-              {downloading ? 'Downloading…' : 'Download'}
-            </Text>
-          </Pressable>
-          {!downloading && records.length === 0 && (
-            <Pressable style={styles.smallButton} onPress={onClear}>
-              <Text style={styles.smallButtonText}>Clear</Text>
+      {/* ── On-device card ── */
+      {hasDevice && (
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>ON DEVICE</Text>
+          <Text style={[styles.cardMeta, { marginTop: 2, marginBottom: spacing.md }]}>
+            {count} record{count !== 1 ? 's' : ''} · saved every 60 s
+          </Text>
+          <View style={styles.row}>
+            <Pressable
+              style={[styles.button, downloading && styles.buttonDisabled]}
+              onPress={onDownload}
+              disabled={downloading}
+            >
+              <Text style={styles.buttonText}>
+                {downloading ? 'Downloading…' : 'Download to app'}
+              </Text>
             </Pressable>
-          )}
-          {downloading && <ActivityIndicator color={colors.orange} />}
-        </View>
-
-        {downloading && progress && (
-          <View style={{ marginTop: spacing.md }}>
-            <View style={styles.progressTrack}>
-              <View style={[
-                styles.progressFill,
-                { width: `${(progress.received / progress.total) * 100}%` as any }
-              ]} />
-            </View>
-            <Text style={[styles.cardMeta, { marginTop: spacing.xs }]}>
-              {progress.received} / {progress.total}
-            </Text>
+            {!downloading && (
+              <Pressable style={styles.smallButton} onPress={onClear}>
+                <Text style={styles.smallButtonText}>Clear device</Text>
+              </Pressable>
+            )}
+            {downloading && <ActivityIndicator color={colors.orange} />}
           </View>
-        )}
-      </View>
 
-      {records.length > 0 && (
+          {downloading && progress && (
+            <View style={{ marginTop: spacing.md }}>
+              <View style={styles.progressTrack}>
+                <View style={[
+                  styles.progressFill,
+                  { width: `${(progress.received / progress.total) * 100}%` as any }
+                ]} />
+              </View>
+              <Text style={[styles.cardMeta, { marginTop: spacing.xs }]}>
+                {progress.received} / {progress.total}
+              </Text>
+            </View>
+          )}
+        </View>
+      )}
+
+      {/* ── Downloaded data card ── */}
+      {hasDownloaded && (
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>{records.length} RECORDS DOWNLOADED</Text>
+          <Text style={styles.sectionTitle}>DOWNLOADED TO APP</Text>
+          <Text style={[styles.cardMeta, { marginTop: 2 }]}>
+            {records.length} record{records.length !== 1 ? 's' : ''}
+          </Text>
+          {timeOffset === 0 && (
+            <View style={[styles.warningBanner, { marginTop: spacing.sm }]}>
+              <Text style={styles.warningText}>
+                ⚠️ Timestamps are estimated — connect again with new firmware for accurate time sync
+              </Text>
+            </View>
+          )}
+          <ExportButton records={records} anchorMs={anchorMs} timeOffset={timeOffset} />
+          {records.length >= 2 && <HistoryChart records={records} anchorMs={anchorMs} timeOffset={timeOffset} />}
           {records.slice(-20).reverse().map((r, i) => (
-            <HistoryRow key={i} record={r} />
+            <HistoryRow key={i} record={r} anchorMs={anchorMs} timeOffset={timeOffset} lastTs={records[records.length - 1].ts} />
           ))}
           {records.length > 20 && (
             <Text style={styles.muted}>Showing last 20 of {records.length}</Text>
@@ -351,11 +467,65 @@ function HistoryView({
   );
 }
 
-function HistoryRow({ record }: { record: HistoryRecord }) {
-  const mins = Math.floor(record.ts / 60);
-  const h    = Math.floor(mins / 60);
-  const m    = mins % 60;
-  const timeStr = `T+${h}h${String(m).padStart(2, '0')}m`;
+function ExportButton({ records, anchorMs, timeOffset }: { records: HistoryRecord[]; anchorMs: number; timeOffset: number }) {
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  async function handleExport() {
+    setExporting(true);
+    setExportError(null);
+    try {
+      const csv = recordsToCSV(records, anchorMs, timeOffset);
+      const date = new Date(anchorMs > 0 ? anchorMs : Date.now())
+        .toISOString().slice(0, 16).replace('T', '_').replace(':', '-');
+      const filename = `ambient_${date}.csv`;
+      const dir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+      if (dir) {
+        // Write a real .csv file and share it
+        const path = dir + filename;
+        await FileSystem.writeAsStringAsync(path, csv, { encoding: FileSystem.EncodingType.UTF8 });
+        await Sharing.shareAsync(path, {
+          mimeType: 'text/csv',
+          dialogTitle: filename,
+          UTI: 'public.comma-separated-values-text',
+        });
+      } else {
+        // Fallback: share as plain text (saves as .txt but content is valid CSV)
+        await Share.share({ message: csv, title: filename });
+      }
+    } catch (e: any) {
+      if (e?.message !== 'The user did not share') {
+        console.log('[Export] error:', e);
+        setExportError(e?.message ?? 'Export failed');
+      }
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  return (
+    <View>
+      <Pressable
+        style={[styles.smallButton, exporting && styles.buttonDisabled, { marginBottom: exportError ? spacing.xs : spacing.sm }]}
+        onPress={handleExport}
+        disabled={exporting}
+      >
+        <Text style={styles.smallButtonText}>{exporting ? 'Exporting…' : 'Export CSV'}</Text>
+      </Pressable>
+      {exportError && <Text style={[styles.error, { fontSize: 12, marginBottom: spacing.sm }]}>{exportError}</Text>}
+    </View>
+  );
+}
+
+function HistoryRow({ record, anchorMs, timeOffset, lastTs }: { record: HistoryRecord; anchorMs: number; timeOffset: number; lastTs: number }) {
+  const realMs = getRecordMs(record, anchorMs, lastTs, timeOffset);
+  const d = new Date(realMs);
+  const isReal = record.ts > 1_000_000_000 || timeOffset > 0;
+  const timeStr = isReal
+    ? `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`
+    : anchorMs > 0
+      ? `~${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`
+      : `T+${Math.floor(record.ts/3600)}h${String(Math.floor((record.ts%3600)/60)).padStart(2,'0')}m`;
   return (
     <View style={styles.historyRow}>
       <Text style={styles.historyTime}>{timeStr}</Text>
@@ -426,6 +596,10 @@ const styles = StyleSheet.create({
   historyValue:     { fontSize: 12, color: colors.text, flex: 1 },
   progressTrack:    { height: 4, backgroundColor: colors.border, borderRadius: 2 },
   progressFill:     { height: 4, backgroundColor: colors.orange, borderRadius: 2 },
+  warningBanner:    { backgroundColor: '#FFF9E6', borderRadius: radius.sm, padding: spacing.md, borderLeftWidth: 3, borderLeftColor: '#FFCC00' },
+  warningText:      { fontSize: 12, color: '#7A5F00' },
   muted:            { color: colors.textMuted },
   error:            { color: '#FF3B30' },
+  liveBadge:        { paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.good },
+  liveBadgeText:    { color: colors.good, fontSize: 10, fontWeight: '700' },
 });

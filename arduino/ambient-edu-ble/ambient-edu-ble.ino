@@ -114,6 +114,7 @@
   #define I2C_SDA          6
   #define I2C_SCL          7
   #define HAS_POWER_EN    false
+  #define ENABLE_BATTERY        // SparkFun C6 Thing Plus has MAX17048 built in
 
 #else
   #error "No board selected! Uncomment BOARD_AMBIENT_ONE or BOARD_SPARKFUN_C6."
@@ -137,7 +138,7 @@
 #include <LittleFS.h>
 
 // ── Optional: Battery Monitor ────────────────────────────────
-// #define ENABLE_BATTERY
+// Enabled automatically for boards that have a fuel gauge (see board config above).
 #ifdef ENABLE_BATTERY
   #include <Adafruit_MAX1704X.h>
   Adafruit_MAX17048 battGauge;

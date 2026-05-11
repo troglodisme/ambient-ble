@@ -10,6 +10,12 @@
       "ios": {
         "simulator": false
       }
+    },
+    "production": {
+      "distribution": "store",
+      "ios": {
+        "buildConfiguration": "Release"
+      }
     }
   }
 }

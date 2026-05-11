@@ -6,14 +6,15 @@ export default {
   expo: {
     name: appName,
     slug: 'ambient-ble',
-    version: '0.1.0',
+    version: '1.0.0',
     owner: 'aw-software',
     orientation: 'portrait',
     userInterfaceStyle: 'light',
-    newArchEnabled: true,
+    newArchEnabled: false,
     platforms: ['ios', 'android'],
     ios: {
       bundleIdentifier,
+      buildNumber: '1',
       supportsTablet: false,
       config: { usesNonExemptEncryption: false },
       infoPlist: {
