@@ -398,7 +398,7 @@ function HistoryView({
 
   return (
     <View style={{ gap: spacing.md }}>
-      {/* ── On-device card ── */
+      {/* ── On-device card ── */}
       {hasDevice && (
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>ON DEVICE</Text>
