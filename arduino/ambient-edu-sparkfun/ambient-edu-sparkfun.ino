@@ -43,7 +43,7 @@
 
 // ── Config ───────────────────────────────────────────────────
 #define NUM_PIXELS       1
-#define LED_BRIGHTNESS  50
+#define LED_BRIGHTNESS  20  // 0–255; kept low to save power (NeoPixel can draw ~60 mA at full white)
 #define SENSOR_RETRY_MS 5000   // ms between sensor re-init attempts
 #define LOG_INTERVAL_S  60     // seconds between history writes
 #define MAX_RECORDS     1440   // ring buffer size (1440 × 60 s = 24 h)
@@ -254,7 +254,7 @@ void updateLed() {
     // Breathing: sine wave over a 4-second period, mapped to 10–200 brightness.
     float phase = (millis() % 4000) / 4000.0f;          // 0.0 → 1.0
     float sine  = (sinf(phase * 2.0f * PI) + 1.0f) / 2.0f; // 0.0 → 1.0
-    uint8_t bri = (uint8_t)(10 + sine * 90);             // 10–100 range
+    uint8_t bri = (uint8_t)(5 + sine * 15);              // 5–20 range (low power)
 
     pixel.setBrightness(bri);
 
