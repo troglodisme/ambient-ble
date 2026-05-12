@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Dimensions, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import Svg, { Line, Polyline, Text as SvgText } from 'react-native-svg';
 
 import { getRecordMs } from './ble';
@@ -41,16 +41,20 @@ export default function HistoryChart({
   records,
   anchorMs,
   timeOffset = 0,
+  width: widthProp,
 }: {
   records: HistoryRecord[];
   anchorMs: number;
   timeOffset?: number;
+  width?: number;
 }) {
+  const { width: windowW } = useWindowDimensions();
   const [active, setActive] = useState<Set<SeriesKey>>(
     () => new Set<SeriesKey>(['co2', 'pm25', 'temp', 'humidity']),
   );
 
-  const screenW = Dimensions.get('window').width - spacing.lg * 4;
+  const availableW = widthProp ?? (windowW - spacing.lg * 4);
+  const screenW = availableW;
   const chartW = Math.max(screenW, records.length * MIN_PX_PER_POINT);
   const plotW = chartW - PAD.left - PAD.right;
   const plotH = CHART_H - PAD.top - PAD.bottom;

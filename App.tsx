@@ -9,6 +9,7 @@ import {
   StyleSheet,
   Text,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import * as FileSystem from 'expo-file-system';
@@ -202,10 +203,13 @@ export default function App() {
     (a.name ?? '').localeCompare(b.name ?? '')
   );
 
+  const { width: winW } = useWindowDimensions();
+  const wide = winW >= 768;
+
   return (
     <View style={styles.safe}>
       <StatusBar style="dark" />
-      <ScrollView contentContainerStyle={styles.container}>
+      <ScrollView contentContainerStyle={[styles.container, wide && styles.containerWide]}>
         <Text style={styles.brand}>AMBIENT BLE</Text>
 
         {/* ── Scan / device list ── */}
@@ -254,6 +258,7 @@ export default function App() {
         {/* ── Connected device ── */}
         {selected && (
           <>
+            {/* Device header — always full width */}
             <View style={styles.deviceHeader}>
               <View>
                 <Text style={styles.cardTitle}>{selected.name}</Text>
@@ -285,50 +290,93 @@ export default function App() {
             )}
 
             {connState === 'connected' && (
-              <>
-                {/* Tab bar */}
-                <View style={styles.tabs}>
-                  <Pressable
-                    style={[styles.tab, screen === 'live' && styles.tabActive]}
-                    onPress={() => setScreen('live')}
-                  >
-                    <Text style={[styles.tabText, screen === 'live' && styles.tabTextActive]}>Live</Text>
-                  </Pressable>
-                  <Pressable
-                    style={[styles.tab, screen === 'session' && styles.tabActive]}
-                    onPress={() => setScreen('session')}
-                  >
-                    <Text style={[styles.tabText, screen === 'session' && styles.tabTextActive]}>Session</Text>
-                  </Pressable>
-                  <Pressable
-                    style={[styles.tab, screen === 'history' && styles.tabActive]}
-                    onPress={() => setScreen('history')}
-                  >
-                    <Text style={[styles.tabText, screen === 'history' && styles.tabTextActive]}>
-                      History {histCount > 0 ? `(${histCount})` : ''}
-                    </Text>
-                  </Pressable>
+              wide ? (
+                /* ── Wide layout: left panel (Live) + right panel (Session/History) ── */
+                <View style={styles.wideLayout}>
+                  {/* Left column — Live readings, always visible */}
+                  <View style={styles.wideLeft}>
+                    <Text style={styles.sectionTitle}>LIVE</Text>
+                    <ReadingsView readings={readings} />
+                  </View>
+
+                  {/* Right column — tabbed Session / History */}
+                  <View style={styles.wideRight}>
+                    <View style={styles.tabs}>
+                      <Pressable
+                        style={[styles.tab, screen === 'session' && styles.tabActive]}
+                        onPress={() => setScreen('session')}
+                      >
+                        <Text style={[styles.tabText, screen === 'session' && styles.tabTextActive]}>Session</Text>
+                      </Pressable>
+                      <Pressable
+                        style={[styles.tab, screen === 'history' && styles.tabActive]}
+                        onPress={() => setScreen('history')}
+                      >
+                        <Text style={[styles.tabText, screen === 'history' && styles.tabTextActive]}>
+                          History {histCount > 0 ? `(${histCount})` : ''}
+                        </Text>
+                      </Pressable>
+                    </View>
+
+                    {screen !== 'history' && (
+                      <SessionView liveHistory={liveHistory} />
+                    )}
+                    {screen === 'history' && (
+                      <HistoryView
+                        records={history}
+                        count={histCount}
+                        downloading={downloading}
+                        progress={dlProgress}
+                        anchorMs={anchorMs}
+                        timeOffset={timeOffset}
+                        onDownload={handleDownload}
+                        onClear={handleClearHistory}
+                      />
+                    )}
+                  </View>
                 </View>
+              ) : (
+                /* ── Narrow layout: original tabs ── */
+                <>
+                  <View style={styles.tabs}>
+                    <Pressable
+                      style={[styles.tab, screen === 'live' && styles.tabActive]}
+                      onPress={() => setScreen('live')}
+                    >
+                      <Text style={[styles.tabText, screen === 'live' && styles.tabTextActive]}>Live</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.tab, screen === 'session' && styles.tabActive]}
+                      onPress={() => setScreen('session')}
+                    >
+                      <Text style={[styles.tabText, screen === 'session' && styles.tabTextActive]}>Session</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.tab, screen === 'history' && styles.tabActive]}
+                      onPress={() => setScreen('history')}
+                    >
+                      <Text style={[styles.tabText, screen === 'history' && styles.tabTextActive]}>
+                        History {histCount > 0 ? `(${histCount})` : ''}
+                      </Text>
+                    </Pressable>
+                  </View>
 
-                {screen === 'live' && <ReadingsView readings={readings} />}
-
-                {screen === 'session' && (
-                  <SessionView liveHistory={liveHistory} />
-                )}
-
-                {screen === 'history' && (
-                  <HistoryView
-                    records={history}
-                    count={histCount}
-                    downloading={downloading}
-                    progress={dlProgress}
-                    anchorMs={anchorMs}
-                    timeOffset={timeOffset}
-                    onDownload={handleDownload}
-                    onClear={handleClearHistory}
-                  />
-                )}
-              </>
+                  {screen === 'live' && <ReadingsView readings={readings} />}
+                  {screen === 'session' && <SessionView liveHistory={liveHistory} />}
+                  {screen === 'history' && (
+                    <HistoryView
+                      records={history}
+                      count={histCount}
+                      downloading={downloading}
+                      progress={dlProgress}
+                      anchorMs={anchorMs}
+                      timeOffset={timeOffset}
+                      onDownload={handleDownload}
+                      onClear={handleClearHistory}
+                    />
+                  )}
+                </>
+              )
             )}
           </>
         )}
@@ -594,8 +642,13 @@ function Metric({
 const styles = StyleSheet.create({
   safe:             { flex: 1, backgroundColor: colors.bg, paddingTop: 60 },
   container:        { padding: spacing.lg, gap: spacing.md },
+  containerWide:    { maxWidth: 1200, alignSelf: 'center', width: '100%' },
   brand:            { fontSize: 14, letterSpacing: 2, color: colors.textMuted, fontWeight: '600', marginBottom: spacing.sm },
   row:              { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  // Wide (Mac/iPad) two-column layout
+  wideLayout:       { flexDirection: 'row', gap: spacing.lg, alignItems: 'flex-start' },
+  wideLeft:         { width: 260, gap: spacing.md },
+  wideRight:        { flex: 1, gap: spacing.md },
   button:           { backgroundColor: colors.orange, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderRadius: radius.md },
   buttonSecondary:  { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border },
   buttonDisabled:   { opacity: 0.6 },

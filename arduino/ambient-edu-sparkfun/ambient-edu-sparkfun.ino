@@ -273,7 +273,6 @@ void updateLed() {
 // ═════════════════════════════════════════════════════════════
 void setup() {
   Serial.begin(115200);
-  while (!Serial) { delay(100); }
   delay(500);
 
   char bleName[20];
