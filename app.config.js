@@ -1,5 +1,6 @@
 const bundleIdentifier =
-  process.env.BUNDLE_IDENTIFIER || 'io.ambientworks.ambientble.dev';
+  process.env.BUNDLE_IDENTIFIER ||
+  (process.env.EAS_BUILD_PROFILE === 'production' ? 'io.ambientworks.ambientble' : 'io.ambientworks.ambientble.dev');
 const appName = process.env.APP_NAME || 'Ambient BLE';
 
 export default {
@@ -14,7 +15,7 @@ export default {
     platforms: ['ios', 'android'],
     ios: {
       bundleIdentifier,
-      buildNumber: '1',
+      buildNumber: '2',
       supportsTablet: false,
       config: { usesNonExemptEncryption: false },
       infoPlist: {
