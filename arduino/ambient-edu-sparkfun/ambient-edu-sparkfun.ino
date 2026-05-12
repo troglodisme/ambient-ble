@@ -224,42 +224,48 @@ void streamHistory(uint32_t startIndex) {
 }
 
 // ── LED helpers ──────────────────────────────────────────────
-uint32_t idColour(uint8_t id) {
-  uint16_t hue = ((uint16_t)(id - 1) * 9830) % 65536;
-  return Adafruit_NeoPixel::ColorHSV(hue, 255, 200);
-}
 
-void flashId(uint8_t id) {
-  uint32_t c = idColour(id);
+// Boot flash: 5 quick white flashes to confirm power-on and firmware start.
+void flashWhite() {
   for (int i = 0; i < 5; i++) {
-    pixel.setPixelColor(0, c); pixel.show(); delay(200);
-    pixel.clear();             pixel.show(); delay(200);
+    pixel.setBrightness(LED_BRIGHTNESS);
+    pixel.setPixelColor(0, pixel.Color(200, 200, 200)); pixel.show(); delay(120);
+    pixel.clear(); pixel.show(); delay(120);
   }
-  pixel.setPixelColor(0, c); pixel.show();
-}
-
-void pulseAmber() {
-  static bool on = false;
-  on = !on;
-  pixel.setPixelColor(0, on ? pixel.Color(60, 20, 0) : 0);
-  pixel.show();
 }
 
 // LED state machine — call every loop iteration when sensor is running.
-//   Connected                → bright solid device colour
-//   Advertising, time set   → dim solid device colour
-//   Advertising, no time    → slow white blink (needs time sync via app)
+//
+//   State                   Colour          Pattern
+//   ─────────────────────── ─────────────── ──────────────────────────────
+//   Connected               White           Bright solid (all good, in use)
+//   Advertising, time set   White           Slow breathing (idle, healthy)
+//   Advertising, no time    Amber           Slow breathing (needs time sync)
+//   Sensor error            Red             Fast blink
+//
+// "Breathing" = smooth sine-wave fade using millis(). Period ~4 s.
+// White means nominal; amber means attention needed; red means error.
 void updateLed() {
   if (BLE.connected()) {
+    // Bright solid white — device is connected and streaming data.
     pixel.setBrightness(LED_BRIGHTNESS);
-    pixel.setPixelColor(0, idColour(DEVICE_ID));
-  } else if (timeOffset > 0) {
-    pixel.setBrightness(LED_BRIGHTNESS / 3);
-    pixel.setPixelColor(0, idColour(DEVICE_ID));
+    pixel.setPixelColor(0, pixel.Color(200, 200, 200));
   } else {
-    bool on = (millis() / 1000) % 2 == 0;
-    pixel.setBrightness(LED_BRIGHTNESS / 3);
-    pixel.setPixelColor(0, on ? pixel.Color(200, 200, 200) : 0);
+    // Breathing: sine wave over a 4-second period, mapped to 10–200 brightness.
+    float phase = (millis() % 4000) / 4000.0f;          // 0.0 → 1.0
+    float sine  = (sinf(phase * 2.0f * PI) + 1.0f) / 2.0f; // 0.0 → 1.0
+    uint8_t bri = (uint8_t)(10 + sine * 90);             // 10–100 range
+
+    pixel.setBrightness(bri);
+
+    if (timeOffset > 0) {
+      // White breathing — advertising normally, time already synced.
+      pixel.setPixelColor(0, pixel.Color(200, 200, 200));
+    } else {
+      // Amber breathing — advertising but time has never been synced.
+      // Open the Ambient BLE app and connect once to fix this.
+      pixel.setPixelColor(0, pixel.Color(200, 80, 0));
+    }
   }
   pixel.show();
 }
@@ -275,7 +281,7 @@ void setup() {
   Serial.printf("\n=== Ambient Edu BLE — SparkFun ESP32-C6 ===\nDevice: %s\n", bleName);
 
   pixel.begin(); pixel.setBrightness(LED_BRIGHTNESS); pixel.clear(); pixel.show();
-  flashId(DEVICE_ID);
+  flashWhite();  // 5 white flashes = firmware started OK
 
   // ── LittleFS ─────────────────────────────────────────────
   if (!LittleFS.begin(true)) {
@@ -321,7 +327,11 @@ void loop() {
 
   // ── Sensor retry ─────────────────────────────────────────
   if (!sensorReady) {
-    pulseAmber();
+    // Red fast blink = sensor error / waiting for SEN66 to initialise.
+    { bool on = (millis() / 250) % 2 == 0;
+      pixel.setBrightness(LED_BRIGHTNESS);
+      pixel.setPixelColor(0, on ? pixel.Color(200, 0, 0) : 0);
+      pixel.show(); }
     if (millis() - lastSensorRetry >= SENSOR_RETRY_MS) {
       lastSensorRetry = millis();
       sensorReady = initSensor();
