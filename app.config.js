@@ -12,6 +12,7 @@ export default {
     orientation: 'portrait',
     userInterfaceStyle: 'light',
     newArchEnabled: false,
+    icon: './icon.png',
     platforms: ['ios', 'android'],
     ios: {
       bundleIdentifier,
