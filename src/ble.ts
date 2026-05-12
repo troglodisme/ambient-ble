@@ -106,10 +106,33 @@ export async function startScan(onDevice: (d: DiscoveredDevice) => void) {
     console.log('[BLE] matched device:', name, p.id);
     onDevice({ id: p.id, name, rssi: p.rssi });
   });
-  console.log('[BLE] calling BleManager.scan...');
-  await BleManager.scan({ serviceUUIDs: [SERVICE_UUID], seconds: 30, allowDuplicates: true });
-  console.log('[BLE] scan started');
-  return () => { sub.remove(); BleManager.stopScan().catch(() => {}); };
+
+  let stopped = false;
+  async function doScan() {
+    if (stopped) return;
+    console.log('[BLE] calling BleManager.scan (no service filter)...');
+    // No serviceUUIDs filter — iOS silently drops devices that don't include
+    // the UUID in every advertisement packet. Filter by name instead.
+    await BleManager.scan({ serviceUUIDs: [], seconds: 10, allowDuplicates: false });
+    console.log('[BLE] scan started');
+  }
+
+  // Auto-restart every 10 s so the user doesn't have to tap again
+  const stopSub = BleManager.onStopScan(() => {
+    if (!stopped) {
+      console.log('[BLE] scan stopped, restarting...');
+      doScan();
+    }
+  });
+
+  await doScan();
+
+  return () => {
+    stopped = true;
+    sub.remove();
+    stopSub.remove();
+    BleManager.stopScan().catch(() => {});
+  };
 }
 
 // ── Connect + live subscribe ─────────────────────────────────

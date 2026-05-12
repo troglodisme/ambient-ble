@@ -13,6 +13,7 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import {
   DiscoveredDevice,
@@ -43,6 +44,7 @@ export default function App() {
   const [screen, setScreen]         = useState<Screen>('live');
   const [histCount, setHistCount]   = useState<number>(0);
   const [history, setHistory]       = useState<HistoryRecord[]>([]);
+  const [lastDevice, setLastDevice] = useState<DiscoveredDevice | null>(null);
   const [downloading, setDownloading]   = useState(false);
   const [dlProgress, setDlProgress] = useState<{ received: number; total: number } | null>(null);
   const [hasHistory, setHasHistory] = useState(false);
@@ -56,6 +58,13 @@ export default function App() {
 
   useEffect(() => {
     return () => { stopScanRef.current?.(); disconnectRef.current?.(); };
+  }, []);
+
+  // Load last connected device from storage on mount
+  useEffect(() => {
+    AsyncStorage.getItem('lastDevice').then(val => {
+      if (val) setLastDevice(JSON.parse(val));
+    }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -96,9 +105,10 @@ export default function App() {
         console.log('[App] device discovered:', d.name, d.id);
         setDevices(prev => ({ ...prev, [d.id]: d }));
       });
-      console.log('[App] scan running');
+      console.log('[App] scan running (auto-restarts every 10 s)');
       stopScanRef.current = stop;
-      setTimeout(() => { stop(); stopScanRef.current = null; setScanning(false); }, 30_000);
+      // Stop after 60 s total
+      setTimeout(() => { stop(); stopScanRef.current = null; setScanning(false); }, 60_000);
     } catch (e: any) {
       console.log('[App] scan error:', e);
       setError(e?.message ?? 'Scan failed');
@@ -110,6 +120,11 @@ export default function App() {
     console.log('[App] handleConnect:', d.name, d.id);
     stopScanRef.current?.();
     setScanning(false);
+    // Remember this device for next time
+    AsyncStorage.setItem('lastDevice', JSON.stringify(d)).catch(() => {});
+    setLastDevice(d);
+    // Make sure it's in the devices map so `selected` resolves
+    setDevices(prev => ({ ...prev, [d.id]: d }));
     setSelectedId(d.id);
     setConnState('connecting');
     setConnStatus('Connecting…');
@@ -153,6 +168,7 @@ export default function App() {
     setLiveHistory([]);
     lastLiveTs.current = 0;
     setTimeOffset(0);
+    // Don't clear lastDevice — keep it for quick reconnect
   }
 
   async function handleDownload() {
@@ -195,14 +211,24 @@ export default function App() {
         {/* ── Scan / device list ── */}
         {!selected && (
           <>
+            {/* Last device quick-connect */}
+            {lastDevice && connState === 'idle' && (
+              <Pressable
+                style={[styles.button, { marginBottom: spacing.sm }]}
+                onPress={() => handleConnect(lastDevice)}
+              >
+                <Text style={styles.buttonText}>Connect to {lastDevice.name ?? lastDevice.id}</Text>
+              </Pressable>
+            )}
+
             <View style={styles.row}>
               <Pressable
-                style={[styles.button, scanning && styles.buttonDisabled]}
+                style={[styles.button, styles.buttonSecondary, scanning && styles.buttonDisabled]}
                 onPress={handleScan}
                 disabled={scanning}
               >
-                <Text style={styles.buttonText}>
-                  {scanning ? 'Scanning…' : 'Scan for devices'}
+                <Text style={[styles.buttonText, { color: colors.text }]}>
+                  {scanning ? 'Scanning…' : lastDevice ? 'Scan for other devices' : 'Scan for devices'}
                 </Text>
               </Pressable>
               {scanning && <ActivityIndicator color={colors.orange} />}
@@ -571,6 +597,7 @@ const styles = StyleSheet.create({
   brand:            { fontSize: 14, letterSpacing: 2, color: colors.textMuted, fontWeight: '600', marginBottom: spacing.sm },
   row:              { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   button:           { backgroundColor: colors.orange, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderRadius: radius.md },
+  buttonSecondary:  { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border },
   buttonDisabled:   { opacity: 0.6 },
   buttonText:       { color: '#fff', fontWeight: '600' },
   smallButton:      { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card },
