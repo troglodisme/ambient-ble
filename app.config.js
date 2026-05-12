@@ -7,7 +7,7 @@ export default {
   expo: {
     name: appName,
     slug: 'ambient-ble',
-    version: '0.2.0',
+    version: '0.3.0',
     owner: 'aw-software',
     orientation: 'portrait',
     userInterfaceStyle: 'light',
@@ -16,7 +16,7 @@ export default {
     platforms: ['ios', 'android'],
     ios: {
       bundleIdentifier,
-      buildNumber: '5',
+      buildNumber: '6',
       supportsTablet: false,
       config: { usesNonExemptEncryption: false },
       infoPlist: {
