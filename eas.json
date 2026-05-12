@@ -11,6 +11,12 @@
         "simulator": false
       }
     },
+    "internal": {
+      "distribution": "internal",
+      "ios": {
+        "buildConfiguration": "Release"
+      }
+    },
     "production": {
       "distribution": "store",
       "ios": {
