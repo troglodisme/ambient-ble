@@ -38,7 +38,7 @@
       </dict>
     </array>
     <key>CFBundleVersion</key>
-    <string>6</string>
+    <string>7</string>
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
     <key>LSMinimumSystemVersion</key>
@@ -56,6 +56,8 @@
     <string>This app uses Bluetooth to read live data from Ambient Edu sensors.</string>
     <key>NSBluetoothPeripheralUsageDescription</key>
     <string>This app uses Bluetooth to read live data from Ambient Edu sensors.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>This app uses your location to tag sensor readings on the Map tab.</string>
     <key>RCTNewArchEnabled</key>
     <true/>
     <key>UILaunchStoryboardName</key>

@@ -16,7 +16,7 @@ export default {
     platforms: ['ios', 'android'],
     ios: {
       bundleIdentifier,
-      buildNumber: '6',
+      buildNumber: '7',
       supportsTablet: false,
       config: { usesNonExemptEncryption: false },
       infoPlist: {
