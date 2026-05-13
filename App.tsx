@@ -250,7 +250,12 @@ export default function App() {
               ))}
             </View>
           </View>
-          <MapView readings={liveReadings} />
+          <MapView
+            readings={liveReadings}
+            historyRecords={history.length > 0 ? history : undefined}
+            anchorMs={anchorMs}
+            timeOffset={timeOffset}
+          />
         </View>
       )}
 

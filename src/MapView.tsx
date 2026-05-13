@@ -7,11 +7,36 @@ import {
   Text,
   View,
 } from 'react-native';
-import MapView, { Circle, Callout, Marker, Region, PROVIDER_DEFAULT } from 'react-native-maps';
+import MapView, { Callout, Marker, Polyline, Region, PROVIDER_DEFAULT } from 'react-native-maps';
 import * as Location from 'expo-location';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { colors, radius, spacing } from './theme';
 import { sharedStyles as s } from './styles';
+import { HistoryRecord, getRecordMs } from './ble';
+
+const TAGS_KEY = '@ambient_map_tags';
+
+// GPS point buffered during the walk (no re-renders needed — stored in a ref)
+type GpsPoint = { lat: number; lon: number; epoch: number };
+
+/** Linearly interpolate lat/lon from a GPS track for a given epoch. */
+function interpolateGps(
+  track: GpsPoint[],
+  targetEpoch: number,
+): { lat: number; lon: number } | null {
+  if (track.length === 0) return null;
+  let lo = -1, hi = -1;
+  for (let i = 0; i < track.length; i++) {
+    if (track[i].epoch <= targetEpoch) lo = i;
+    if (hi === -1 && track[i].epoch >= targetEpoch) hi = i;
+  }
+  if (lo === -1 || hi === -1) return null;
+  const p1 = track[lo], p2 = track[hi];
+  if (p1.epoch === p2.epoch) return { lat: p1.lat, lon: p1.lon };
+  const t = (targetEpoch - p1.epoch) / (p2.epoch - p1.epoch);
+  return { lat: p1.lat + (p2.lat - p1.lat) * t, lon: p1.lon + (p2.lon - p1.lon) * t };
+}
 
 export type TaggedReading = {
   id: number;
@@ -22,6 +47,7 @@ export type TaggedReading = {
   temperature: number;
   humidity?: number;
   capturedAt: number; // ms
+  source?: 'manual' | 'history'; // 'history' = back-filled from downloaded records
 };
 
 export type LiveReadings = {
@@ -196,11 +222,22 @@ const AUTO_MIN_DIST_M  = 3; // only tag if moved ≥3 m
 
 export default function AirMapView({
   readings,
+  historyRecords,
+  anchorMs,
+  timeOffset,
 }: {
   readings: LiveReadings | null;
+  /** Downloaded history records — triggers GPS back-fill when set */
+  historyRecords?: HistoryRecord[];
+  anchorMs?: number;
+  timeOffset?: number;
 }) {
   const mapRef = useRef<MapView>(null);
   const [tags, setTags] = useState<TaggedReading[]>([]);
+  const [tagsLoaded, setTagsLoaded] = useState(false);
+  const [backfilledTags, setBackfilledTags] = useState<TaggedReading[]>([]);
+  // GPS track buffer — ref so GPS updates don't cause re-renders
+  const gpsTrackRef = useRef<GpsPoint[]>([]);
   const [userLocation, setUserLocation] = useState<{ lat: number; lon: number } | null>(null);
   const [locError, setLocError] = useState<string | null>(null);
   const [tagging, setTagging] = useState(false);
@@ -211,6 +248,28 @@ export default function AirMapView({
   const lastAutoLocRef = useRef<{ lat: number; lon: number } | null>(null);
   const readingsRef = useRef(readings);
   readingsRef.current = readings;
+
+  // Load persisted tags on mount
+  useEffect(() => {
+    AsyncStorage.getItem(TAGS_KEY).then(raw => {
+      if (raw) {
+        try {
+          const loaded: TaggedReading[] = JSON.parse(raw);
+          if (loaded.length > 0) {
+            setTags(loaded);
+            nextId = Math.max(...loaded.map(t => t.id)) + 1;
+          }
+        } catch {}
+      }
+      setTagsLoaded(true);
+    });
+  }, []);
+
+  // Persist tags whenever they change (skip before initial load)
+  useEffect(() => {
+    if (!tagsLoaded) return;
+    AsyncStorage.setItem(TAGS_KEY, JSON.stringify(tags)).catch(() => {});
+  }, [tags, tagsLoaded]);
 
   // Request location permission + start watching on mount
   useEffect(() => {
@@ -230,6 +289,13 @@ export default function AirMapView({
         loc => {
           const pos = { lat: loc.coords.latitude, lon: loc.coords.longitude };
           setUserLocation(pos);
+          // Buffer GPS track for history back-fill (downsample to ≥5 s gaps, cap at 8640 pts)
+          const epoch = loc.timestamp;
+          const track = gpsTrackRef.current;
+          if (track.length === 0 || epoch - track[track.length - 1].epoch >= 5000) {
+            const next = [...track, { lat: pos.lat, lon: pos.lon, epoch }];
+            gpsTrackRef.current = next.length > 8640 ? next.slice(-8640) : next;
+          }
         }
       );
     })();
@@ -270,6 +336,36 @@ export default function AirMapView({
 
   // Keep latest location available for auto-timer without re-starting it
   useEffect(() => { lastAutoLocRef.current = userLocation; }, [userLocation]);
+
+  // Back-fill tags from downloaded history records matched to GPS track
+  useEffect(() => {
+    if (!historyRecords || historyRecords.length === 0) {
+      setBackfilledTags([]);
+      return;
+    }
+    const track = gpsTrackRef.current;
+    if (track.length === 0) return; // no GPS coverage yet
+    const lastTs = historyRecords[historyRecords.length - 1].ts;
+    const filled: TaggedReading[] = [];
+    let bfId = -1;
+    for (const r of historyRecords) {
+      const epoch = getRecordMs(r, anchorMs ?? 0, lastTs, timeOffset ?? 0);
+      const pos = interpolateGps(track, epoch);
+      if (!pos) continue;
+      filled.push({
+        id: bfId--,
+        lat: pos.lat,
+        lon: pos.lon,
+        pm25: r.pm25,
+        co2: r.co2,
+        temperature: r.temperature,
+        humidity: r.humidity,
+        capturedAt: epoch,
+        source: 'history',
+      });
+    }
+    setBackfilledTags(filled);
+  }, [historyRecords]);
 
   function addTag(loc: { lat: number; lon: number }, r: LiveReadings) {
     const tag: TaggedReading = {
@@ -342,11 +438,35 @@ export default function AirMapView({
         showsMyLocationButton
         showsCompass
       >
+        {/* Polyline connecting all points (manual + history) sorted by time */}
+        {(() => {
+          const allSorted = [...tags, ...backfilledTags].sort((a, b) => a.capturedAt - b.capturedAt);
+          return allSorted.length >= 2 ? (
+            <Polyline
+              coordinates={allSorted.map(t => ({ latitude: t.lat, longitude: t.lon }))}
+              strokeColors={allSorted.map(t => qualityColor(t.pm25))}
+              strokeWidth={5}
+              lineCap="round"
+              lineJoin="round"
+            />
+          ) : null;
+        })()}
+
+        {/* Manual tags */}
         {tags.map(tag => (
           <ReadingMarker
             key={tag.id}
             tag={tag}
             onRemove={() => setTags(prev => prev.filter(t => t.id !== tag.id))}
+          />
+        ))}
+
+        {/* History back-filled tags (smaller dot, removable) */}
+        {backfilledTags.map(tag => (
+          <ReadingMarker
+            key={tag.id}
+            tag={tag}
+            onRemove={() => setBackfilledTags(prev => prev.filter(t => t.id !== tag.id))}
           />
         ))}
       </MapView>

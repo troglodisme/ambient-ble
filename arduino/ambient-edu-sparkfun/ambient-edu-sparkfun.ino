@@ -363,13 +363,18 @@ void loop() {
     }
   }
 
-  // ── Read sensor ──────────────────────────────────────────
+  // ── Read sensor (non-blocking 1 Hz) ──────────────────────
+  static uint32_t lastRead = 0;
+  if (millis() - lastRead < 1000) {
+    updateLed();
+    return;  // keep polling BLE without blocking
+  }
+  lastRead = millis();
+
   float pm1p0 = 0, pm2p5 = 0, pm4p0 = 0, pm10p0 = 0;
   float humidity = 0, temperature = 0;
   float vocIndex = 0, noxIndex = 0;
   uint16_t co2 = 0;
-
-  delay(1000);
 
   sensorError = sensor.readMeasuredValues(
       pm1p0, pm2p5, pm4p0, pm10p0,
