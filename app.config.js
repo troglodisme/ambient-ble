@@ -7,7 +7,7 @@ export default {
   expo: {
     name: appName,
     slug: 'ambient-ble',
-    version: '0.3.0',
+    version: '0.4.0',
     owner: 'aw-software',
     orientation: 'portrait',
     userInterfaceStyle: 'light',
