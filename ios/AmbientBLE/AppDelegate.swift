@@ -29,6 +29,16 @@ public class AppDelegate: ExpoAppDelegate {
       launchOptions: launchOptions)
 #endif
 
+#if targetEnvironment(macCatalyst)
+    // Set a comfortable default window size and allow resizing freely
+    DispatchQueue.main.async {
+      if let scene = self.window?.windowScene {
+        scene.sizeRestrictions?.minimumSize = CGSize(width: 820, height: 640)
+        scene.sizeRestrictions?.maximumSize = CGSize(width: 4096, height: 4096)
+      }
+    }
+#endif
+
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 

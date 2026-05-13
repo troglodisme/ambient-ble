@@ -297,6 +297,7 @@ void setup() {
 
   // ── BLE ──────────────────────────────────────────────────
   if (!BLE.begin()) { Serial.println("BLE init failed!"); while (1); }
+  BLE.setConnectionInterval(6, 12); // 7.5–15 ms intervals for faster notifications
 
   BLE.setLocalName(bleName);
   BLE.setDeviceName(bleName);

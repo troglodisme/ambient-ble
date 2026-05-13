@@ -195,7 +195,7 @@ export async function connectAndSubscribe(
     const cmd = [nowSec & 0xff, (nowSec >> 8) & 0xff, (nowSec >> 16) & 0xff, (nowSec >> 24) & 0xff];
     await BleManager.write(deviceId, SERVICE_UUID, CHAR_SET_TIME, cmd, 4);
     // Brief pause so the firmware's BLE.poll() can process the write before we read back
-    await new Promise<void>(r => setTimeout(r, 400));
+    await new Promise<void>(r => setTimeout(r, 150));
     const raw = await BleManager.read(deviceId, SERVICE_UUID, CHAR_SET_TIME);
     timeOffset = u32(raw, 0);
     console.log('[BLE] time synced, boot epoch offset:', timeOffset);

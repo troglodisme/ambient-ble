@@ -27,7 +27,7 @@ import { sharedStyles as styles } from './src/styles';
 import ReadingsView from './src/ReadingsView';
 import SessionView from './src/SessionView';
 import HistoryView from './src/HistoryView';
-import MapView from './src/MapView';
+import MapView, { LiveReadings } from './src/MapView';
 
 type ConnState = 'idle' | 'connecting' | 'connected' | 'error';
 type Screen = 'live' | 'session' | 'history' | 'map';
@@ -50,9 +50,11 @@ export default function App() {
   const [anchorMs, setAnchorMs] = useState<number>(0);
   const [timeOffset, setTimeOffset] = useState<number>(0);
   const [liveHistory, setLiveHistory] = useState<HistoryRecord[]>([]);
+  const [scanElapsed, setScanElapsed] = useState(0);
 
   const stopScanRef = useRef<(() => void) | null>(null);
   const disconnectRef = useRef<(() => Promise<void>) | null>(null);
+  const scanTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastLiveTs = useRef<number>(0);
 
   useEffect(() => {
@@ -93,12 +95,19 @@ export default function App() {
     return Object.values(res).every(v => v === 'granted');
   }
 
+  function clearScanTimer() {
+    if (scanTimerRef.current) { clearInterval(scanTimerRef.current); scanTimerRef.current = null; }
+  }
+
   async function handleScan() {
     console.log('[App] handleScan start');
     setError(null);
     if (!(await requestAndroidPerms())) { setError('Bluetooth permissions denied'); return; }
     setDevices({});
     setScanning(true);
+    setScanElapsed(0);
+    clearScanTimer();
+    scanTimerRef.current = setInterval(() => setScanElapsed(s => s + 1), 1000);
     try {
       const stop = await startScan(d => {
         console.log('[App] device discovered:', d.name, d.id);
@@ -107,18 +116,21 @@ export default function App() {
       console.log('[App] scan running (auto-restarts every 10 s)');
       stopScanRef.current = stop;
       // Stop after 60 s total
-      setTimeout(() => { stop(); stopScanRef.current = null; setScanning(false); }, 60_000);
+      setTimeout(() => {
+        stop(); stopScanRef.current = null;
+        clearScanTimer(); setScanElapsed(0); setScanning(false);
+      }, 60_000);
     } catch (e: any) {
       console.log('[App] scan error:', e);
       setError(e?.message ?? 'Scan failed');
-      setScanning(false);
+      clearScanTimer(); setScanElapsed(0); setScanning(false);
     }
   }
 
   async function handleConnect(d: DiscoveredDevice) {
     console.log('[App] handleConnect:', d.name, d.id);
     stopScanRef.current?.();
-    setScanning(false);
+    clearScanTimer(); setScanElapsed(0); setScanning(false);
     // Remember this device for next time
     AsyncStorage.setItem('lastDevice', JSON.stringify(d)).catch(() => {});
     setLastDevice(d);
@@ -204,9 +216,46 @@ export default function App() {
   const { width: winW } = useWindowDimensions();
   const wide = winW >= 768;
 
+  const liveReadings = readings.particles && readings.gases && readings.env ? {
+    pm25: readings.particles.pm25,
+    co2: readings.gases.co2,
+    temperature: readings.env.temperature,
+    humidity: readings.env.humidity,
+  } : null;
+
+  // Map tab takes full height — render outside ScrollView
+  const showFullMap = selected && connState === 'connected' && screen === 'map';
+
   return (
     <View style={styles.safe}>
       <StatusBar style="dark" />
+
+      {/* ── Map tab (full height, no scroll) ── */}
+      {showFullMap && (
+        <View style={{ flex: 1 }}>
+          {/* Compact header strip */}
+          <View style={[styles.deviceHeader, { borderRadius: 0, paddingTop: 0 }]}>
+            <Text style={styles.cardTitle}>{selected.name}</Text>
+            <View style={[s_row]}>
+              {(['live', 'session', 'history', 'map'] as Screen[]).map(sc => (
+                <Pressable
+                  key={sc}
+                  style={[styles.tab, screen === sc && styles.tabActive, { flex: 0, paddingHorizontal: spacing.md }]}
+                  onPress={() => setScreen(sc)}
+                >
+                  <Text style={[styles.tabText, screen === sc && styles.tabTextActive]}>
+                    {sc === 'history' && histCount > 0 ? `History (${histCount})` : sc.charAt(0).toUpperCase() + sc.slice(1)}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+          <MapView readings={liveReadings} />
+        </View>
+      )}
+
+      {/* ── Everything else in a ScrollView ── */}
+      {!showFullMap && (
       <ScrollView contentContainerStyle={[styles.container, wide && styles.containerWide]}>
         <Text style={styles.brand}>AMBIENT BLE</Text>
 
@@ -230,15 +279,33 @@ export default function App() {
                 disabled={scanning}
               >
                 <Text style={[styles.buttonText, { color: colors.text }]}>
-                  {scanning ? 'Scanning…' : lastDevice ? 'Scan for other devices' : 'Scan for devices'}
+                  {scanning
+                    ? `Scanning… ${Math.floor(scanElapsed / 60)}:${String(scanElapsed % 60).padStart(2, '0')}`
+                    : lastDevice ? 'Scan for other devices' : 'Scan for devices'}
                 </Text>
               </Pressable>
               {scanning && <ActivityIndicator color={colors.orange} />}
             </View>
 
+            {scanning && deviceList.length === 0 && scanElapsed >= 15 && (
+              <View style={[styles.card, { gap: spacing.xs }]}>
+                <Text style={{ color: colors.text, fontWeight: '600' }}>No boards found yet</Text>
+                <Text style={styles.muted}>· Make sure the board is powered on</Text>
+                <Text style={styles.muted}>· Check the white/amber LED is breathing</Text>
+                <Text style={styles.muted}>· Move within 5 m of the board</Text>
+                <Text style={styles.muted}>· Scan restarts automatically every 10 s</Text>
+              </View>
+            )}
+
+            {scanning && deviceList.length > 0 && (
+              <Text style={styles.muted}>
+                Found {deviceList.length} device{deviceList.length !== 1 ? 's' : ''} · tap to connect
+              </Text>
+            )}
+
             {error && <Text style={styles.error}>{error}</Text>}
 
-            {deviceList.length === 0 && !scanning && (
+            {!scanning && deviceList.length === 0 && (
               <Text style={styles.muted}>Tap scan to find nearby Ambient Edu boards.</Text>
             )}
 
@@ -300,26 +367,17 @@ export default function App() {
                   {/* Right column — tabbed Session / History / Map */}
                   <View style={styles.wideRight}>
                     <View style={styles.tabs}>
-                      <Pressable
-                        style={[styles.tab, screen === 'session' && styles.tabActive]}
-                        onPress={() => setScreen('session')}
-                      >
-                        <Text style={[styles.tabText, screen === 'session' && styles.tabTextActive]}>Session</Text>
-                      </Pressable>
-                      <Pressable
-                        style={[styles.tab, screen === 'history' && styles.tabActive]}
-                        onPress={() => setScreen('history')}
-                      >
-                        <Text style={[styles.tabText, screen === 'history' && styles.tabTextActive]}>
-                          History {histCount > 0 ? `(${histCount})` : ''}
-                        </Text>
-                      </Pressable>
-                      <Pressable
-                        style={[styles.tab, screen === 'map' && styles.tabActive]}
-                        onPress={() => setScreen('map')}
-                      >
-                        <Text style={[styles.tabText, screen === 'map' && styles.tabTextActive]}>Map</Text>
-                      </Pressable>
+                      {(['session', 'history', 'map'] as Screen[]).map(sc => (
+                        <Pressable
+                          key={sc}
+                          style={[styles.tab, screen === sc && styles.tabActive]}
+                          onPress={() => setScreen(sc)}
+                        >
+                          <Text style={[styles.tabText, screen === sc && styles.tabTextActive]}>
+                            {sc === 'history' && histCount > 0 ? `History (${histCount})` : sc.charAt(0).toUpperCase() + sc.slice(1)}
+                          </Text>
+                        </Pressable>
+                      ))}
                     </View>
 
                     {screen === 'session' && <SessionView liveHistory={liveHistory} />}
@@ -335,47 +393,23 @@ export default function App() {
                         onClear={handleClearHistory}
                       />
                     )}
-                    {screen === 'map' && (
-                      <MapView
-                        readings={readings.particles && readings.gases && readings.env ? {
-                          pm25: readings.particles.pm25,
-                          co2: readings.gases.co2,
-                          temperature: readings.env.temperature,
-                        } : null}
-                      />
-                    )}
                   </View>
                 </View>
               ) : (
-                /* ── Narrow layout: original tabs ── */
+                /* ── Narrow layout: tabs ── */
                 <>
                   <View style={styles.tabs}>
-                    <Pressable
-                      style={[styles.tab, screen === 'live' && styles.tabActive]}
-                      onPress={() => setScreen('live')}
-                    >
-                      <Text style={[styles.tabText, screen === 'live' && styles.tabTextActive]}>Live</Text>
-                    </Pressable>
-                    <Pressable
-                      style={[styles.tab, screen === 'session' && styles.tabActive]}
-                      onPress={() => setScreen('session')}
-                    >
-                      <Text style={[styles.tabText, screen === 'session' && styles.tabTextActive]}>Session</Text>
-                    </Pressable>
-                    <Pressable
-                      style={[styles.tab, screen === 'history' && styles.tabActive]}
-                      onPress={() => setScreen('history')}
-                    >
-                      <Text style={[styles.tabText, screen === 'history' && styles.tabTextActive]}>
-                        History {histCount > 0 ? `(${histCount})` : ''}
-                      </Text>
-                    </Pressable>
-                    <Pressable
-                      style={[styles.tab, screen === 'map' && styles.tabActive]}
-                      onPress={() => setScreen('map')}
-                    >
-                      <Text style={[styles.tabText, screen === 'map' && styles.tabTextActive]}>Map</Text>
-                    </Pressable>
+                    {(['live', 'session', 'history', 'map'] as Screen[]).map(sc => (
+                      <Pressable
+                        key={sc}
+                        style={[styles.tab, screen === sc && styles.tabActive]}
+                        onPress={() => setScreen(sc)}
+                      >
+                        <Text style={[styles.tabText, screen === sc && styles.tabTextActive]}>
+                          {sc === 'history' && histCount > 0 ? `(${histCount})` : sc.charAt(0).toUpperCase() + sc.slice(1)}
+                        </Text>
+                      </Pressable>
+                    ))}
                   </View>
 
                   {screen === 'live' && <ReadingsView readings={readings} />}
@@ -392,22 +426,17 @@ export default function App() {
                       onClear={handleClearHistory}
                     />
                   )}
-                  {screen === 'map' && (
-                    <MapView
-                      readings={readings.particles && readings.gases && readings.env ? {
-                        pm25: readings.particles.pm25,
-                        co2: readings.gases.co2,
-                        temperature: readings.env.temperature,
-                      } : null}
-                    />
-                  )}
                 </>
               )
             )}
           </>
         )}
       </ScrollView>
+      )}
     </View>
   );
 }
+
+// alias for inline use in map header
+const s_row = { flexDirection: 'row' as const, gap: 4 };
 
