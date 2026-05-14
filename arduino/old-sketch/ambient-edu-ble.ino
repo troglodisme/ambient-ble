@@ -26,7 +26,7 @@
  * HISTORY LOGGING
  * ───────────────
  * One reading is saved to flash (LittleFS) every LOG_INTERVAL_S seconds.
- * Up to MAX_RECORDS readings are kept as a ring buffer (~24 h at 60 s).
+ * Up to MAX_RECORDS readings are kept as a ring buffer (~72 h at 60 s).
  * To download history over BLE:
  *   1. Read HISTORY_COUNT  → uint32 = number of records stored
  *   2. Write start index (uint32 LE) to HISTORY_DATA
@@ -125,7 +125,7 @@
 #define LED_BRIGHTNESS   50
 #define SENSOR_RETRY_MS  5000    // ms between sensor reinit attempts
 #define LOG_INTERVAL_S   60      // seconds between history writes
-#define MAX_RECORDS      1440    // ring buffer size (1440 × 60 s = 24 h)
+#define MAX_RECORDS      4320    // ring buffer size (4320 × 60 s = 72 h)
 #define HISTORY_FILE     "/history.bin"
 #define META_FILE        "/history_meta.bin"
 

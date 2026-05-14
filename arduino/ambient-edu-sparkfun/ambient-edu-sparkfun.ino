@@ -46,7 +46,7 @@
 #define LED_BRIGHTNESS  20  // 0–255; kept low to save power (NeoPixel can draw ~60 mA at full white)
 #define SENSOR_RETRY_MS 5000   // ms between sensor re-init attempts
 #define LOG_INTERVAL_S  60     // seconds between history writes
-#define MAX_RECORDS     1440   // ring buffer size (1440 × 60 s = 24 h)
+#define MAX_RECORDS     4320   // ring buffer size (4320 × 60 s = 72 h)
 #define HISTORY_FILE    "/history.bin"
 #define META_FILE       "/history_meta.bin"
 #define TIME_FILE       "/time_offset.bin"
