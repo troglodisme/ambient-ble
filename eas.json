@@ -23,5 +23,13 @@
         "buildConfiguration": "Release"
       }
     }
+  },
+  "submit": {
+    "production": {
+      "ios": {
+        "ascAppId": "6768472501",
+        "appleTeamId": "J566499KXW"
+      }
+    }
   }
 }
